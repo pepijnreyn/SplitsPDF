@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>A0 → 16× A4 PDF Splitter</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a212b;
+    --accent: #4f8cff;
+    --accent-hover: #3a78f0;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --border: #2a333f;
+    --ok: #3fb950;
+    --err: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 40px 20px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    width: 100%;
+    max-width: 640px;
+    padding: 32px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+  }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  p.sub { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
+  .drop {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.drag { border-color: var(--accent); background: rgba(79,140,255,.06); }
+  .drop strong { color: var(--accent); }
+  .drop .file { margin-top: 12px; font-size: 14px; color: var(--text); word-break: break-all; }
+  input[type=file] { display: none; }
+  .opts { margin-top: 24px; display: grid; gap: 18px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .row label { font-size: 14px; }
+  .row .hint { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  select, input[type=number] {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 14px;
+    width: 110px;
+  }
+  button.go {
+    margin-top: 26px;
+    width: 100%;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 14px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  button.go:hover:not(:disabled) { background: var(--accent-hover); }
+  button.go:disabled { opacity: .5; cursor: not-allowed; }
+  .status {
+    margin-top: 18px;
+    font-size: 14px;
+    min-height: 20px;
+  }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--err); }
+  .bar {
+    margin-top: 12px;
+    height: 6px;
+    background: var(--bg);
+    border-radius: 4px;
+    overflow: hidden;
+    display: none;
+  }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .grid-prev {
+    display: grid;
+    gap: 3px;
+    margin: 18px auto 0;
+    width: 120px;
+  }
+  .grid-prev div {
+    aspect-ratio: 210 / 297;
+    background: var(--border);
+    border-radius: 2px;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>A0 → 16× A4 Splitter</h1>
+    <p class="sub">Splits an A0-size PDF page into a 4×4 grid of A4 tiles, ready for printing. Everything runs in your browser — your file is never uploaded.</p>
+
+    <label class="drop" id="drop">
+      <input type="file" id="fileInput" accept="application/pdf" />
+      <div>📄 <strong>Click to choose</strong> or drop an A0 PDF here</div>
+      <div class="file" id="fileName"></div>
+    </label>
+
+    <div class="opts">
+      <div class="row">
+        <div>
+          <label for="grid">Grid</label>
+          <div class="hint">A0 = 4×4 A4 tiles (16 pages)</div>
+        </div>
+        <select id="grid">
+          <option value="4x4" selected>4 × 4  (16 pages)</option>
+          <option value="2x2">2 × 2  (4 pages, A2 source)</option>
+          <option value="3x3">3 × 3  (9 pages)</option>
+        </select>
+      </div>
+      <div class="row">
+        <div>
+          <label for="overlap">Overlap (mm)</label>
+          <div class="hint">Extra margin on each tile for gluing</div>
+        </div>
+        <input type="number" id="overlap" value="0" min="0" max="30" step="1" />
+      </div>
+      <div class="row">
+        <div>
+          <label for="page">Source page</label>
+          <div class="hint">Which page of the PDF to split</div>
+        </div>
+        <input type="number" id="page" value="1" min="1" step="1" />
+      </div>
+    </div>
+
+    <div class="grid-prev" id="gridPrev"></div>
+
+    <button class="go" id="go" disabled>Split &amp; Download PDF</button>
+
+    <div class="bar" id="bar"><div></div></div>
+    <div class="status" id="status"></div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const fileInput = $('fileInput');
+const drop = $('drop');
+const fileNameEl = $('fileName');
+const goBtn = $('go');
+const statusEl = $('status');
+const bar = $('bar');
+const barFill = bar.firstElementChild;
+const gridSel = $('grid');
+const gridPrev = $('gridPrev');
+
+let pdfBytes = null;
+
+function setStatus(msg, type = '') {
+  statusEl.textContent = msg;
+  statusEl.className = 'status ' + type;
+}
+
+function renderPreview() {
+  const [cols, rows] = gridSel.value.split('x').map(Number);
+  gridPrev.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  gridPrev.innerHTML = '';
+  for (let i = 0; i < cols * rows; i++) gridPrev.appendChild(document.createElement('div'));
+}
+gridSel.addEventListener('change', renderPreview);
+renderPreview();
+
+function loadFile(file) {
+  if (!file) return;
+  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+    setStatus('Please select a PDF file.', 'err');
+    return;
+  }
+  fileNameEl.textContent = file.name;
+  setStatus('Reading file…');
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    pdfBytes = new Uint8Array(e.target.result);
+    goBtn.disabled = false;
+    setStatus('Ready — click Split & Download.', 'ok');
+  };
+  reader.onerror = () => setStatus('Could not read the file.', 'err');
+  reader.readAsArrayBuffer(file);
+}
+
+fileInput.addEventListener('change', (e) => loadFile(e.target.files[0]));
+['dragenter', 'dragover'].forEach(ev =>
+  drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('drag'); }));
+['dragleave', 'drop'].forEach(ev =>
+  drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', (e) => loadFile(e.dataTransfer.files[0]));
+
+const MM = 72 / 25.4; // points per millimetre
+
+goBtn.addEventListener('click', async () => {
+  if (!pdfBytes) return;
+  goBtn.disabled = true;
+  bar.style.display = 'block';
+  barFill.style.width = '0%';
+  setStatus('Loading PDF…');
+
+  try {
+    const { PDFDocument } = PDFLib;
+    const src = await PDFDocument.load(pdfBytes);
+    const pageCount = src.getPageCount();
+    const pageIdx = Math.min(Math.max(1, parseInt($('page').value) || 1), pageCount) - 1;
+    const [cols, rows] = gridSel.value.split('x').map(Number);
+    const overlap = (parseFloat($('overlap').value) || 0) * MM;
+
+    const srcPage = src.getPage(pageIdx);
+    const { width: W, height: H } = srcPage.getSize();
+    const tileW = W / cols;
+    const tileH = H / rows;
+
+    const out = await PDFDocument.create();
+    const total = cols * rows;
+    let done = 0;
+
+    // top-to-bottom, left-to-right printing order
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        // clip region in source coordinates (origin bottom-left)
+        const left   = Math.max(0, c * tileW - overlap);
+        const right  = Math.min(W, (c + 1) * tileW + overlap);
+        const bottom = Math.max(0, H - (r + 1) * tileH - overlap);
+        const top    = Math.min(H, H - r * tileH + overlap);
+
+        const embedded = await out.embedPage(srcPage, { left, bottom, right, top });
+        const pw = right - left;
+        const ph = top - bottom;
+        const page = out.addPage([pw, ph]);
+        page.drawPage(embedded, { x: 0, y: 0, width: pw, height: ph });
+
+        done++;
+        barFill.style.width = Math.round((done / total) * 100) + '%';
+        await new Promise(res => setTimeout(res)); // let UI update
+      }
+    }
+
+    setStatus('Saving…');
+    const bytes = await out.save();
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const base = (fileNameEl.textContent || 'document').replace(/\.pdf$/i, '');
+    a.href = url;
+    a.download = `${base}_${cols}x${rows}_A4.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    setStatus(`Done — ${total} A4 pages created and downloaded.`, 'ok');
+  } catch (err) {
+    console.error(err);
+    setStatus('Error: ' + (err.message || err), 'err');
+  } finally {
+    goBtn.disabled = false;
+    setTimeout(() => { bar.style.display = 'none'; }, 800);
+  }
+});
+</script>
+</body>
+</html>
